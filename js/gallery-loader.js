@@ -1,407 +1,728 @@
-/* =============================================================
-   ShotsBySkaza — photo loader
-   Reads pre-generated manifest files (see /manifests) for the photo
-   list, dimensions, thumbnail path, and full-resolution path for each
-   category. Manifests + WebP thumbnails are generated automatically by
-   a GitHub Action (.github/workflows/generate-manifests.yml) every time
-   photos are added or removed — nothing to run by hand.
+/* ==========================================================================
+   ShotsBySkaza — stylesheet
+   Design tokens live at the top as CSS custom properties. Everything below
+   derives its color/type/spacing decisions from these.
+   ========================================================================== */
 
-   HOW IT WORKS
-   - manifests/<category>.json lists every photo in that category, e.g.
-     manifests/sports.json, manifests/clients/<slug>.json.
-   - manifests/clients/index.json lists every client gallery folder, for
-     the Client Galleries hub page.
-   - The gallery displays each photo's small WebP thumbnail. The
-     lightbox (see main.js) opens the full-resolution original only when
-     a photo is actually clicked.
-   - A photo's real width/height (from the manifest) is used to place it
-     into whichever masonry column is currently shortest — true masonry,
-     no cropping, no reordering after placement.
-   - Thumbnails are lazy: an <img> only gets a real src once it's near
-     the viewport (see sbsLazyLoadObserver below).
+:root {
+  /* Color */
+  --bg: #0b0d14;
+  --bg-panel: #12151f;
+  --bg-panel-2: #171b28;
+  --line: rgba(244, 245, 250, 0.09);
+  --line-strong: rgba(244, 245, 250, 0.16);
+  --text: #f4f5fa;
+  --text-muted: #9096ab;
+  --text-faint: #5b6178;
+  --brand: #4557f3;
+  --brand-light: #8391ff;
+  --brand-dim: #2c3899;
+  --focus: #ffb347;
 
-   IF A MANIFEST IS MISSING
-   That just means the Action hasn't generated it yet for that folder
-   (e.g. right after adding a brand-new category or client folder) — the
-   affected gallery shows its normal "no photos yet" empty state rather
-   than an error. It resolves itself on the next push.
-   ============================================================= */
+  /* Type */
+  --font-display: "Oswald", "Arial Narrow", sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
 
-const SBS_REPO_OWNER = "mskaza00";
-const SBS_REPO_NAME = "website-5";
+  /* Layout */
+  --header-h: 84px;
+  --gutter: clamp(1.25rem, 3vw, 3rem);
+  --max-w: 1400px;
+  --radius: 3px;
 
-function sbsRawUrl(relPath) {
-  return `https://raw.githubusercontent.com/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/main/${relPath}`;
+  /* Motion */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --header-alpha: 1;
 }
 
-function sbsFormatLabel(slug) {
-  return slug
-    .replace(/[-_]+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
+/* ---------------- Reset ---------------- */
 
-// How long a fetched manifest is trusted before asking GitHub again.
-const SBS_CACHE_TTL_MS = 2 * 60 * 1000;
+*, *::before, *::after { box-sizing: border-box; }
 
-const SBS_JSON_CACHE = new Map();
+html { scroll-behavior: smooth; scroll-padding-top: var(--header-h); background: #0b0d14; }
 
-/* Fetches and caches any JSON file from the repo (manifests, the client
-   index, etc). Returns [] on a 404 or network error rather than
-   throwing — a missing manifest is a normal, temporary state, not a
-   bug, so callers don't need their own try/catch around this. */
-async function sbsLoadManifest(relPath) {
-  if (SBS_JSON_CACHE.has(relPath)) return SBS_JSON_CACHE.get(relPath);
-
-  const cacheKey = `sbs-cache:${relPath}`;
-  try {
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
-        SBS_JSON_CACHE.set(relPath, parsed.data);
-        return parsed.data;
-      }
-    }
-  } catch (e) {
-    /* skip cache on error */
-  }
-
-  let data = [];
-  try {
-    const res = await fetch(sbsRawUrl(relPath));
-    if (res.ok) data = await res.json();
-  } catch (e) {
-    /* network error — fall through with empty data */
-  }
-
-  SBS_JSON_CACHE.set(relPath, data);
-  try {
-    sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data }));
-  } catch (e) {
-    /* skip cache on error */
-  }
-
-  return data;
-}
-
-/* Homepage exclude list — a plain-text file in the repo root. Filenames
-   listed there are skipped from the homepage combined feed only; they
-   still show up normally on their own category page. */
-let SBS_EXCLUDE_CACHE = null;
-
-async function sbsLoadExcludeList() {
-  if (SBS_EXCLUDE_CACHE) return SBS_EXCLUDE_CACHE;
-
-  const cacheKey = "sbs-cache:homepage-exclude.txt";
-  try {
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
-        SBS_EXCLUDE_CACHE = new Set(parsed.data);
-        return SBS_EXCLUDE_CACHE;
-      }
-    }
-  } catch (e) {
-    /* skip cache on error */
-  }
-
-  try {
-    const res = await fetch(sbsRawUrl("homepage-exclude.txt"));
-    if (res.ok) {
-      const text = await res.text();
-      const names = text
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#"));
-      SBS_EXCLUDE_CACHE = new Set(names);
-      try {
-        sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data: names }));
-      } catch (e) {
-        /* skip cache on error */
-      }
-    } else {
-      SBS_EXCLUDE_CACHE = new Set();
-    }
-  } catch (e) {
-    SBS_EXCLUDE_CACHE = new Set();
-  }
-
-  return SBS_EXCLUDE_CACHE;
-}
-
-/* Converts a manifest entry (repo-relative paths) into what the renderer
-   needs (full raw URLs, ready to use as src/href). */
-function sbsManifestItemToRenderItem(entry) {
-  return {
-    name: entry.name,
-    width: entry.width,
-    height: entry.height,
-    thumbUrl: sbsRawUrl(entry.thumb || entry.src),
-    fullUrl: sbsRawUrl(entry.src),
-  };
-}
-
-function sbsRenderPhotoCard(item, label) {
-  const card = document.createElement("a");
-  card.href = item.fullUrl; // full-resolution original — opens if a visitor middle-clicks/opens in new tab
-  card.className = "photo-card";
-  card.target = "_blank";
-  card.rel = "noopener";
-  card.dataset.full = item.fullUrl; // used by the lightbox — original only loads on click
-  card.dataset.caption = label ? `${label} — ${item.name}` : item.name;
-
-  const img = document.createElement("img");
-  img.dataset.src = item.thumbUrl; // thumbnail — real src assigned by sbsLazyLoadObserver below
-  img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
-  card.appendChild(img);
-
-  const a = document.createElement("span");
-  a.className = "corner-a";
-  const b = document.createElement("span");
-  b.className = "corner-b";
-  card.appendChild(a);
-  card.appendChild(b);
-
-  return card;
-}
-
-/* Only assigns the real thumbnail src once an image is genuinely near
-   the viewport. Works safely with the JS-built columns below because
-   each column is plain block flow — no global layout/balance step
-   exists that could be thrown off by images resolving at different
-   times, and thumbnails are small (WebP, ~900px wide) either way. */
-const sbsLazyLoadObserver = new IntersectionObserver(
-  (entries) => {
-    entries.forEach((entry) => {
-      if (!entry.isIntersecting) return;
-      const img = entry.target;
-      if (img.dataset.src) {
-        img.src = img.dataset.src;
-        delete img.dataset.src;
-      }
-      sbsLazyLoadObserver.unobserve(img);
-    });
-  },
-  { rootMargin: "600px 0px" }
-);
-
-function sbsFinishContainer(container) {
-  window.SBS_observeCards && window.SBS_observeCards(container);
-  window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
-}
-
-/* ---------------- JS-built masonry columns ----------------
-   Each photo's real (manifest-supplied) height determines which column
-   it's assigned to — always the currently shortest one, exactly like
-   traditional Pinterest-style masonry. Assignment happens once, up
-   front, before any thumbnail has loaded, so a photo can never later
-   jump to a different column or shuffle another photo's position —
-   only the column it's already in can grow. */
-
-function sbsGetColumnCount() {
-  const w = window.innerWidth;
-  if (w >= 1900) return 4;
-  if (w >= 1100) return 3;
-  return 2;
-}
-
-function sbsBuildColumns(container, count) {
-  container.innerHTML = "";
-  const cols = [];
-  for (let i = 0; i < count; i++) {
-    const col = document.createElement("div");
-    col.className = "masonry-col";
-    container.appendChild(col);
-    cols.push(col);
-  }
-  return cols;
-}
-
-function sbsRenderCards(container, entries, label) {
-  const count = sbsGetColumnCount();
-  const cols = sbsBuildColumns(container, count);
-  const colHeights = new Array(count).fill(0);
-
-  const REF_WIDTH = 300; // arbitrary reference width — only used to compare relative heights
-  const cards = entries.map((entryWrapper) => {
-    const item = entryWrapper.entry || entryWrapper;
-    const itemLabel = entryWrapper.label !== undefined ? entryWrapper.label : label;
-    const card = sbsRenderPhotoCard(item, itemLabel);
-
-    const estHeight = item.width && item.height ? (item.height / item.width) * REF_WIDTH : REF_WIDTH;
-
-    let shortest = 0;
-    for (let c = 1; c < count; c++) {
-      if (colHeights[c] < colHeights[shortest]) shortest = c;
-    }
-    cols[shortest].appendChild(card);
-    colHeights[shortest] += estHeight;
-
-    return card;
-  });
-
-  cards.forEach((card) => {
-    const img = card.querySelector("img");
-    if (img) sbsLazyLoadObserver.observe(img);
-  });
-
-  container.dataset.sbsColumns = String(count);
-  container._sbsEntries = entries;
-  container._sbsLabel = label;
-
-  sbsFinishContainer(container);
-}
-
-// Rebuild columns if the viewport crosses a breakpoint (2/3/4 columns), so
-// photos redistribute cleanly instead of staying stuck at a column count
-// meant for a different screen size.
-let sbsResizeTimer = null;
-window.addEventListener("resize", () => {
-  clearTimeout(sbsResizeTimer);
-  sbsResizeTimer = setTimeout(() => {
-    const count = sbsGetColumnCount();
-    document.querySelectorAll(".masonry[data-sbs-columns]").forEach((container) => {
-      if (Number(container.dataset.sbsColumns) === count) return;
-      if (!container._sbsEntries) return;
-      sbsRenderCards(container, container._sbsEntries, container._sbsLabel);
-    });
-  }, 200);
-});
-
-/* Single category (Portraits / Sports / Events pages, and client galleries —
-   folderPath "photos/clients/<slug>" maps to manifests/clients/<slug>.json) */
-async function sbsLoadGallery(containerId, folderPath, label) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  container.classList.add("is-loading");
-
-  const category = folderPath.replace(/^photos\//, "");
-
-  try {
-    const manifest = await sbsLoadManifest(`manifests/${category}.json`);
-    const items = manifest.map(sbsManifestItemToRenderItem);
-
-    container.classList.remove("is-loading");
-
-    if (!items.length) {
-      container.innerHTML = `<div class="gallery-empty">No photos here yet. Drop images into <code>${folderPath}/</code> on GitHub — they'll appear here automatically after thumbnails finish generating (usually under a minute).</div>`;
-      return;
-    }
-
-    sbsRenderCards(container, items, label);
-  } catch (err) {
-    container.classList.remove("is-loading");
-    container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
-/* Combined homepage feed — merges several categories, interleaved */
-async function sbsLoadCombinedGallery(containerId, folders) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  container.classList.add("is-loading");
-
-  try {
-    const excluded = await sbsLoadExcludeList();
-
-    const perFolder = await Promise.all(
-      folders.map(async (f) => {
-        try {
-          const category = f.path.replace(/^photos\//, "");
-          const manifest = await sbsLoadManifest(`manifests/${category}.json`);
-          return manifest
-            .filter((e) => !excluded.has(e.name))
-            .map((e) => ({ entry: sbsManifestItemToRenderItem(e), label: f.label }));
-        } catch (e) {
-          return [];
-        }
-      })
-    );
-
-    const merged = [];
-    const maxLen = Math.max(0, ...perFolder.map((r) => r.length));
-    for (let i = 0; i < maxLen; i++) {
-      perFolder.forEach((r) => {
-        if (r[i]) merged.push(r[i]);
-      });
-    }
-
-    container.classList.remove("is-loading");
-
-    if (!merged.length) {
-      container.innerHTML = `<div class="gallery-empty">No photos yet — add images to the photos/ folders on GitHub and they'll appear here automatically.</div>`;
-      return;
-    }
-
-    sbsRenderCards(container, merged);
-  } catch (err) {
-    container.classList.remove("is-loading");
-    container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
-  }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Client galleries hub — reads manifests/clients/index.json, one entry
-   per client shoot folder */
-async function sbsLoadClientHub(containerId, basePath) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
+img { max-width: 100%; display: block; }
+a { color: inherit; text-decoration: none; }
+ul { list-style: none; margin: 0; padding: 0; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 
-  try {
-    const index = await sbsLoadManifest("manifests/clients/index.json");
-
-    if (!index.length) {
-      container.innerHTML = `<div class="client-empty">No client galleries yet.<br>Create a folder inside <code>${basePath}/</code> on GitHub — one per shoot — drop the photos in, and it'll show up here automatically after thumbnails finish generating.</div>`;
-      return;
-    }
-
-    container.innerHTML = "";
-    index.forEach((c) => {
-      const a = document.createElement("a");
-      a.className = "client-card";
-      a.href = `gallery.html?event=${encodeURIComponent(c.slug)}`;
-
-      const thumb = document.createElement("div");
-      thumb.className = `thumb${c.cover ? "" : " is-empty"}`;
-      if (c.cover) {
-        const img = document.createElement("img");
-        img.src = sbsRawUrl(c.cover);
-        img.alt = `${sbsFormatLabel(c.slug)} cover photo`;
-        img.loading = "lazy";
-        thumb.appendChild(img);
-      } else {
-        thumb.textContent = "—";
-      }
-
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.innerHTML = `<div class="name">${sbsFormatLabel(c.slug)}</div><div class="count">${c.count} photo${c.count === 1 ? "" : "s"}</div>`;
-
-      a.appendChild(thumb);
-      a.appendChild(meta);
-      container.appendChild(a);
-    });
-  } catch (err) {
-    container.innerHTML = `<div class="gallery-error">Couldn't load client galleries right now (${err.message}).</div>`;
-  }
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
 }
 
-/* Single client gallery detail — photos/clients/<slug>/ */
-async function sbsLoadClientDetail(containerId, headingId, basePath) {
-  const params = new URLSearchParams(window.location.search);
-  const slug = params.get("event");
-  const heading = document.getElementById(headingId);
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
 
-  if (!slug) {
-    if (heading) heading.textContent = "Client galleries";
-    return { slug: null };
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--brand-light);
+  margin: 0 0 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+}
+
+.eyebrow::before {
+  content: "";
+  width: 22px;
+  height: 1px;
+  background: var(--brand-light);
+  display: inline-block;
+}
+
+.wrap {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+/* Fixed grain/texture overlay for a bit of atmosphere without relying on any one photo */
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* ---------------- Header ---------------- */
+
+.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  background: rgba(11, 13, 20, var(--header-alpha));
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  border-bottom: 1px solid rgba(244, 245, 250, calc(0.09 * var(--header-alpha)));
+  transition: border-color 0.25s var(--ease);
+}
+
+.header-inner {
+  width: 100%;
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
+}
+
+.logo img {
+  height: 38px;
+  width: 38px;
+  object-fit: contain;
+}
+
+.logo span {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Primary nav (center) */
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 2.1rem;
+}
+
+.site-nav > li > a,
+.dropdown-trigger {
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
+  padding: 0.4rem 0.1rem;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.site-nav > li > a::after,
+.dropdown-trigger::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  background: var(--brand);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.25s var(--ease);
+}
+
+.site-nav > li > a:hover::after,
+.site-nav > li > a[aria-current="page"]::after,
+.dropdown-trigger:hover::after {
+  transform: scaleX(1);
+}
+
+.site-nav > li > a[aria-current="page"] {
+  color: var(--brand-light);
+}
+
+.caret {
+  font-size: 0.7em;
+  transition: transform 0.2s var(--ease);
+}
+
+.dropdown { position: relative; }
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 14px);
+  left: 50%;
+  transform: translate(-50%, 6px);
+  min-width: 178px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.4rem;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s var(--ease), transform 0.18s var(--ease), visibility 0.18s;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.dropdown:hover .dropdown-menu,
+.dropdown:focus-within .dropdown-menu,
+.dropdown.is-open .dropdown-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+.dropdown.is-open .caret { transform: rotate(180deg); }
+
+.dropdown-menu a {
+  display: block;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.88rem;
+  border-radius: 2px;
+  color: var(--text-muted);
+}
+
+.dropdown-menu a:hover,
+.dropdown-menu a:focus-visible {
+  background: rgba(69, 87, 243, 0.12);
+  color: var(--text);
+}
+
+/* Right side: social + contact */
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  flex-shrink: 0;
+}
+
+.icon-link {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  transition: border-color 0.2s var(--ease), color 0.2s var(--ease), background 0.2s var(--ease);
+}
+
+.icon-link:hover {
+  border-color: var(--brand);
+  color: var(--brand-light);
+  background: rgba(69, 87, 243, 0.12);
+}
+
+.icon-link svg { width: 16px; height: 16px; }
+
+.btn-contact {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
+  padding: 0.55rem 1.15rem;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  white-space: nowrap;
+  transition: background 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.btn-contact:hover { background: var(--brand-light); transform: translateY(-1px); }
+
+.mobile-only-contact { display: none; }
+
+.nav-toggle {
+  display: none;
+  flex-direction: column;
+  gap: 5px;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-toggle span {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: var(--text);
+  transition: transform 0.25s var(--ease), opacity 0.2s var(--ease);
+}
+
+.nav-toggle[aria-expanded="true"] span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+/* ---------------- Homepage gallery lead ----------------
+   The homepage has no hero text — the photo grid starts below the header,
+   with some clear breathing room in between rather than sitting flush
+   against it. */
+
+.gallery-lead {
+  padding-top: calc(var(--header-h) + 4rem);
+  padding-bottom: 2.5rem;
+}
+
+/* Simple page header, used on portraits/sports/events/gallery pages */
+
+.page-head {
+  padding: calc(var(--header-h) + 3.6rem) 0 2.8rem;
+}
+
+.page-head h1 {
+  font-size: clamp(2.2rem, 5vw, 3.6rem);
+}
+
+.page-head p {
+  margin-top: 1rem;
+  color: var(--text-muted);
+  max-width: 52ch;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 1.6rem;
+  transition: color 0.2s var(--ease);
+}
+
+.back-link:hover { color: var(--brand-light); }
+
+/* ---------------- Section scaffolding ---------------- */
+
+section { position: relative; z-index: 1; }
+
+.section-head {
+  padding: 5rem 0 2.2rem;
+}
+
+.section-head h2 { font-size: clamp(1.8rem, 4vw, 2.6rem); }
+
+/* ---------------- Masonry gallery ----------------
+   Edge-to-edge, tight gaps, capped column count so tiles stay large —
+   used the same way on every gallery page (homepage, category pages,
+   client galleries). */
+
+.masonry {
+  column-count: 2;
+  column-gap: 6px;
+  padding: 0 6px 6px;
+  max-width: none;
+}
+
+@media (min-width: 1100px) { .masonry { column-count: 3; } }
+@media (min-width: 1900px) { .masonry { column-count: 4; } }
+
+.masonry.is-loading { min-height: 40vh; }
+
+.photo-card {
+  position: relative;
+  display: block;
+  width: 100%;
+  break-inside: avoid;
+  margin-bottom: 6px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-panel);
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.6s var(--ease), transform 0.6s var(--ease);
+}
+
+.photo-card.is-visible { opacity: 1; transform: translateY(0); }
+
+.photo-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  transition: transform 0.5s var(--ease);
+}
+
+.photo-card:hover img { transform: scale(1.035); }
+
+/* Viewfinder corner-bracket signature detail, appears on hover/focus */
+
+.photo-card::before,
+.photo-card::after,
+.photo-card .corner-a,
+.photo-card .corner-b {
+  content: "";
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-color: var(--brand-light);
+  opacity: 0;
+  transition: opacity 0.25s var(--ease), transform 0.25s var(--ease);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.photo-card::before { top: 8px; left: 8px; border-top: 2px solid; border-left: 2px solid; transform: translate(-4px, -4px); }
+.photo-card::after { bottom: 8px; right: 8px; border-bottom: 2px solid; border-right: 2px solid; transform: translate(4px, 4px); }
+.photo-card .corner-a { top: 8px; right: 8px; border-top: 2px solid; border-right: 2px solid; transform: translate(4px, -4px); }
+.photo-card .corner-b { bottom: 8px; left: 8px; border-bottom: 2px solid; border-left: 2px solid; transform: translate(-4px, 4px); }
+
+.photo-card:hover::before,
+.photo-card:hover::after,
+.photo-card:hover .corner-a,
+.photo-card:hover .corner-b,
+.photo-card:focus-visible::before,
+.photo-card:focus-visible::after,
+.photo-card:focus-visible .corner-a,
+.photo-card:focus-visible .corner-b {
+  opacity: 1;
+  transform: translate(0, 0);
+}
+
+.gallery-empty,
+.gallery-error {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-faint);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  padding: 2.4rem 1.6rem;
+  text-align: center;
+  break-inside: avoid;
+}
+
+.gallery-error { color: #ff9d7a; border-color: rgba(255, 157, 122, 0.35); }
+
+/* ---------------- Lightbox ---------------- */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 7, 11, 0.94);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.25s var(--ease), visibility 0.25s;
+  padding: 4vh 4vw;
+}
+
+.lightbox.is-open { opacity: 1; visibility: visible; }
+
+.lightbox-figure {
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.lightbox-figure img {
+  max-width: 92vw;
+  max-height: 80vh;
+  width: auto;
+  border-radius: 2px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+.lightbox-caption {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.lightbox-close,
+.lightbox-prev,
+.lightbox-next {
+  position: fixed;
+  background: rgba(244, 245, 250, 0.06);
+  border: 1px solid var(--line-strong);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+
+.lightbox-close:hover,
+.lightbox-prev:hover,
+.lightbox-next:hover { background: var(--brand); border-color: var(--brand); }
+
+.lightbox-close { top: 24px; right: 24px; }
+.lightbox-prev { left: 24px; top: 50%; transform: translateY(-50%); }
+.lightbox-next { right: 24px; top: 50%; transform: translateY(-50%); }
+
+@media (max-width: 620px) {
+  .lightbox-prev, .lightbox-next { width: 38px; height: 38px; }
+  .lightbox-close { top: 14px; right: 14px; }
+}
+
+/* ---------------- About ---------------- */
+
+.about {
+  padding: 5.5rem 0 6rem;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: clamp(2rem, 5vw, 5rem);
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .about { grid-template-columns: 1fr; }
+}
+
+.about h2 { font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.05; }
+
+.about-body p {
+  color: var(--text-muted);
+  font-size: 1.05rem;
+  margin: 0 0 1.2rem;
+}
+
+.about-body p:last-child { margin-bottom: 0; }
+
+.about-body strong { color: var(--text); font-weight: 600; }
+
+/* ---------------- Client galleries ---------------- */
+
+.client-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1.1rem;
+  padding-bottom: 5.5rem;
+}
+
+.client-card {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-panel);
+  transition: border-color 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.client-card:hover { border-color: var(--brand); transform: translateY(-3px); }
+
+.client-card .thumb {
+  aspect-ratio: 4 / 3;
+  background: var(--bg-panel-2);
+  overflow: hidden;
+}
+
+.client-card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+.client-card .thumb.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 1.6rem;
+  color: var(--text-faint);
+}
+
+.client-card .meta { padding: 0.9rem 1rem 1.1rem; }
+
+.client-card .meta .name {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.client-card .meta .count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  margin-top: 0.3rem;
+}
+
+.client-empty {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--text-faint);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  padding: 3rem 1.6rem;
+  text-align: center;
+  line-height: 1.8;
+}
+
+/* ---------------- Footer ---------------- */
+
+.site-footer {
+  border-top: 1px solid var(--line);
+  padding: 2.6rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.site-footer .email {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  transition: color 0.2s var(--ease);
+}
+
+.site-footer .email:hover { color: var(--brand-light); }
+
+.site-footer .copyright {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+/* ---------------- Responsive nav (mobile) ---------------- */
+
+@media (max-width: 900px) {
+  .nav-toggle { display: flex; }
+
+  .site-nav {
+    position: fixed;
+    top: var(--header-h);
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--line);
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s var(--ease);
   }
 
-  const label = sbsFormatLabel(slug);
-  if (heading) heading.textContent = label;
-  document.title = `${label} | ShotsBySkaza`;
+  .site-nav.is-open { max-height: 70vh; overflow-y: auto; }
 
-  await sbsLoadGallery(containerId, `${basePath}/${slug}`, label);
-  return { slug, label };
+  .site-nav > li { border-top: 1px solid var(--line); }
+  .site-nav > li > a, .dropdown-trigger {
+    width: 100%;
+    padding: 1rem var(--gutter);
+    text-shadow: none;
+  }
+
+  .dropdown-menu {
+    position: static;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    transform: none;
+    opacity: 1;
+    visibility: visible;
+    max-height: 0;
+    overflow: hidden;
+    padding: 0;
+    border: none;
+    box-shadow: none;
+    background: var(--bg-panel-2);
+    transition: max-height 0.25s var(--ease);
+  }
+
+  .dropdown.is-open .dropdown-menu {
+    max-height: 220px;
+    padding: 0.3rem 0;
+    transform: none;
+  }
+
+  .dropdown-menu a {
+    display: block;
+    width: 100%;
+    padding: 0.7rem var(--gutter) 0.7rem calc(var(--gutter) + 1rem);
+    color: var(--text);
+  }
+
+  .header-actions .btn-contact { display: none; }
+  .mobile-only-contact { display: block; }
+}
+
+@media (max-width: 560px) {
+  .header-inner { padding: 0 1.1rem; }
+  :root { --gutter: 1.1rem; }
 }
