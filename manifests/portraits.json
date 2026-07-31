@@ -1,5 +1,13 @@
 [
   {
+    "name": "0F2A1368.jpg",
+    "src": "photos/portraits/0F2A1368.jpg",
+    "thumb": "thumbs/portraits/0F2A1368.webp",
+    "width": 3987,
+    "height": 5980,
+    "aspectRatio": 0.6667
+  },
+  {
     "name": "_F2A1130.jpg",
     "src": "photos/portraits/_F2A1130.jpg",
     "thumb": "thumbs/portraits/_F2A1130.webp",
@@ -51,14 +59,6 @@
     "name": "_F2A1547.jpg",
     "src": "photos/portraits/_F2A1547.jpg",
     "thumb": "thumbs/portraits/_F2A1547.webp",
-    "width": 3987,
-    "height": 5980,
-    "aspectRatio": 0.6667
-  },
-  {
-    "name": "0F2A1368.jpg",
-    "src": "photos/portraits/0F2A1368.jpg",
-    "thumb": "thumbs/portraits/0F2A1368.webp",
     "width": 3987,
     "height": 5980,
     "aspectRatio": 0.6667
