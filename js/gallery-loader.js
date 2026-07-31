@@ -164,7 +164,9 @@ function sbsRenderPhotoCard(item, label) {
 
   const img = document.createElement("img");
   img.dataset.src = item.thumbUrl; // thumbnail — real src assigned by sbsLazyLoadObserver below
-  img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
+img.alt = label
+  ? `Matthew Skaza ${label.toLowerCase()} — ShotsBySkaza`
+  : `Matthew Skaza — ShotsBySkaza`;
   card.appendChild(img);
 
   const a = document.createElement("span");
