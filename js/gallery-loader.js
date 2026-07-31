@@ -28,7 +28,7 @@
    ============================================================= */
 
 const SBS_REPO_OWNER = "mskaza00";
-const SBS_REPO_NAME = "skaza.shotsbyskaza";
+const SBS_REPO_NAME = "skaza.shotsbyskaza-";
 
 function sbsRawUrl(relPath) {
   return `https://raw.githubusercontent.com/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/main/${relPath}`;
