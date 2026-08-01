@@ -1,17 +1,20 @@
-name: Generate manifests
+name: Generate photo manifests and thumbnails
 
+# Runs automatically whenever anything under photos/ changes (upload,
+# delete, rename), and can also be triggered manually from the Actions
+# tab if you ever want to force a refresh.
 on:
   push:
-    branches: [main]
+    paths:
+      - "photos/**"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   generate:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
     steps:
       - uses: actions/checkout@v4
 
@@ -23,10 +26,10 @@ jobs:
 
       - run: npm run generate-manifest
 
-      - name: Commit generated files
+      - name: Commit generated manifests and thumbnails
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add manifests thumbs
-          git diff --cached --quiet || git commit -m "Auto-update photo manifests and thumbnails"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifests thumbs sitemap.xml
+          git diff --staged --quiet || git commit -m "Auto-update photo manifests and thumbnails"
           git push
