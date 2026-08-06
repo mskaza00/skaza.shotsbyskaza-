@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://shotsbyskaza.com/sitemap.xml
+Sitemap: https://skaza.shotsbyskaza.com/sitemap.xml
